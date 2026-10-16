@@ -108,11 +108,57 @@ everything afterwards. Prefer its **Vulkan** backend: it is the one that works
 on AMD and Intel GPUs, where CUDA-based tools (faster-whisper and friends)
 silently fall back to CPU.
 
-### GPU notes
+## Hardware support
 
-whisper.cpp supports CUDA, Vulkan and Metal. Vulkan is the portable option and
-performs well on AMD. For reference, an RX 6650 XT transcribed 95 minutes of
-audio in about 4 minutes with `large-v3-turbo` — roughly 23x realtime.
+The compute backend is whatever your whisper.cpp binary was **built** with —
+CUDA, Vulkan, Metal or plain CPU. `asmrsub` does not pick a backend and does
+not need to: it runs the binary it finds, so a CUDA build uses CUDA, a Metal
+build uses Metal, a CPU build uses the CPU. When several builds are installed
+side by side it prefers CUDA, then Vulkan, then CPU, and prints the one it
+chose on every run.
+
+| | |
+|---|---|
+| NVIDIA | CUDA build, used automatically |
+| AMD / Intel | Vulkan build — the portable GPU backend |
+| Apple Silicon | Metal build (`brew install whisper-cpp` ships one) |
+| No GPU | fully supported — see the threading note below |
+| Multi-GPU | `--device N` |
+| Force CPU | `--no-gpu` |
+
+### CPU-only machines
+
+whisper.cpp defaults `-t` to **4 threads** no matter how many cores are
+present, which leaves most of a CPU-only machine idle. `asmrsub` defaults to
+every logical core instead. Measured on a 6-core/12-thread desktop, 120 s of
+audio, GPU disabled, `large-v3-turbo`:
+
+| threads | time | speed |
+|---|---|---|
+| 4 (whisper.cpp's default) | 93.2 s | 1.3x realtime |
+| 6 (physical cores) | 74.4 s | 1.6x |
+| 8 | 63.6 s | 1.9x |
+| **12 (all logical — the default here)** | **59.6 s** | **2.0x** |
+
+Taking every logical thread won, so SMT is worth using despite the common
+advice to stick to physical cores. Use `--threads` to leave headroom for other
+work.
+
+On a GPU build the setting makes no measurable difference — 9.9 s either way —
+because the encoder runs on the GPU, so the raised default costs GPU users
+nothing. Same clip, same machine:
+
+| | time | speed |
+|---|---|---|
+| Vulkan, RX 6650 XT | 9.9 s | 12x realtime |
+| best CPU result above | 59.6 s | 2.0x |
+
+A full 95-minute recording took about 4 minutes on that GPU, roughly 23x
+realtime.
+
+CPU and GPU runs produce slightly different transcripts, because
+floating-point arithmetic differs between backends. Expect small variation in
+cue counts, not a difference in quality.
 
 ## Commands
 
@@ -133,6 +179,8 @@ asmrsub run ./in --listen --remove-wav
 | `--prompt` | initial prompt; the fix for proper nouns the model keeps re-spelling |
 | `--no-vad` | disable VAD — see the table above before you do |
 | `--repeat-limit N` | consecutive identical lines treated as a decoder loop (default 6) |
+| `--threads N` | CPU threads (default: every logical core) |
+| `--no-gpu` / `--device N` | force CPU / pick a GPU |
 | `--listen` | also render a compressed MP3 for human listening |
 | `--remove-wav` | delete the intermediate 16 kHz WAV afterwards |
 | `--force` | redo work that is already done |

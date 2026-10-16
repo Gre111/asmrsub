@@ -61,12 +61,35 @@ def _subtitle_edit_roots() -> list[Path]:
     return roots
 
 
+def _backend_rank(name: str) -> int:
+    """Preference order for whisper.cpp builds sitting side by side.
+
+    CUDA first where it exists, then Vulkan - the portable GPU backend, and
+    the one that works on AMD and Intel - then anything else accelerated,
+    then plain CPU. The chosen binary is printed on every run, so a machine
+    holding a build it cannot actually execute shows up immediately; override
+    with --whisper or ASMRSUB_WHISPER in that case.
+    """
+    low = name.lower()
+    if "cuda" in low or "cublas" in low:
+        return 0
+    if "vulkan" in low:
+        return 1
+    if "blas" in low or "openvino" in low or "coreml" in low:
+        return 2
+    return 3
+
+
 def _whisper_dirs() -> list[Path]:
     dirs: list[Path] = []
-    # Prefer the Vulkan build: it is the one that works on AMD and Intel GPUs.
     for root in _subtitle_edit_roots():
         stt = root / "SpeechToText"
-        dirs += [stt / "CppVulkan", stt / "Cpp", stt / "CppCuda"]
+        if stt.is_dir():
+            builds = [d for d in stt.iterdir()
+                      if d.is_dir() and d.name.lower().startswith("cpp")]
+            dirs += sorted(builds, key=lambda d: _backend_rank(d.name))
+        else:
+            dirs += [stt / "CppCuda", stt / "CppVulkan", stt / "Cpp"]
     home = Path.home()
     dirs += [home / "whisper.cpp" / "build" / "bin",
              home / "whisper.cpp",

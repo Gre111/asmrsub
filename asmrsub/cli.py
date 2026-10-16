@@ -102,10 +102,13 @@ def process(media: Path, chain: tools.Toolchain, args) -> Outcome | None:
     options = transcribe.WhisperOptions(
         language=args.lang, use_vad=not args.no_vad,
         max_context=args.max_context, prompt=args.prompt,
-        threads=args.threads)
+        threads=args.threads, use_gpu=not args.no_gpu,
+        gpu_device=args.device)
 
     if not raw_srt.exists() or args.force:
         label = "VAD on" if options.use_vad else "VAD OFF"
+        label += ", CPU only" if args.no_gpu else ""
+        label += f", {options.resolved_threads()} threads"
         print(f"  [2/3] transcribing ({label}) ...", end="", flush=True)
         ok = transcribe.run(chain.whisper, chain.model, wav, raw_base, options,
                             chain.vad_model, log=work / f"{short}.whisper.log")
@@ -232,7 +235,14 @@ def build_parser() -> argparse.ArgumentParser:
                                       "proper nouns and domain vocabulary")
     run.add_argument("--max-context", type=int, default=0,
                      help="whisper -mc; 0 prevents repetition loops")
-    run.add_argument("--threads", type=int)
+    run.add_argument("--threads", type=int,
+                     help="CPU threads; defaults to every logical core, "
+                          "because whisper.cpp's own default of 4 leaves a "
+                          "CPU-only machine mostly idle")
+    run.add_argument("--no-gpu", action="store_true",
+                     help="force CPU even if the whisper build supports GPU")
+    run.add_argument("--device", type=int,
+                     help="GPU device index for multi-GPU machines")
     run.add_argument("--repeat-limit", type=int,
                      default=cleanup.DEFAULT_REPEAT_LIMIT,
                      help="consecutive identical lines treated as a loop "
