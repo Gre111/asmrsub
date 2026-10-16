@@ -1,0 +1,42 @@
+# asmrsub working files
+_asmrsub/
+*.16k.wav
+*.listening.mp3
+*.raw.srt
+*.whisper.log
+*.ffmpeg.log
+
+# media and generated subtitles - never commit source material
+*.mp4
+*.mkv
+*.mov
+*.ts
+*.webm
+*.flv
+*.avi
+*.m4v
+*.wmv
+*.wav
+*.mp3
+*.m4a
+*.flac
+*.srt
+*.bin
+
+# python
+__pycache__/
+*.py[cod]
+*.egg-info/
+build/
+dist/
+.venv/
+venv/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# editors / os
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db

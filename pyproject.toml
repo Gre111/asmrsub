@@ -1,0 +1,33 @@
+[build-system]
+requires = ["setuptools>=61"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "asmrsub"
+version = "0.1.0"
+description = "Batch subtitle generation for ASMR and other quiet, long-form recordings, with VAD on by default and hallucination cleanup"
+readme = "README.md"
+requires-python = ">=3.9"
+license = { text = "MIT" }
+keywords = ["asmr", "subtitles", "whisper", "whisper.cpp", "srt", "speech-to-text", "vad", "asr", "transcription"]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Environment :: Console",
+    "Intended Audience :: End Users/Desktop",
+    "License :: OSI Approved :: MIT License",
+    "Operating System :: OS Independent",
+    "Programming Language :: Python :: 3",
+    "Topic :: Multimedia :: Sound/Audio :: Speech",
+    "Topic :: Text Processing :: Linguistic",
+]
+dependencies = []
+
+[project.urls]
+Homepage = "https://github.com/Gre111/asmrsub"
+Issues = "https://github.com/Gre111/asmrsub/issues"
+
+[project.scripts]
+asmrsub = "asmrsub.cli:main"
+
+[tool.setuptools.packages.find]
+include = ["asmrsub*"]
