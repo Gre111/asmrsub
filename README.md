@@ -59,6 +59,16 @@ minutes of nothing. `asmrsub` detects silent spans with ffmpeg and deletes
 cues that fall inside them, which needs no model-side tuning and cannot be
 fooled by a plausible-looking hallucination.
 
+The third comes from VAD itself. whisper.cpp decodes the speech segments
+joined end to end, then maps timestamps back to the original audio — and a cue
+whose words straddle two segments ends up spanning everything between them.
+On two further recordings, 77 cues stayed on screen for more than 30 seconds —
+the longest held a line with 1.6 seconds of speech under it for 484 seconds —
+and because every one of those seconds counted as "subtitled", coverage read a
+reassuring 98%.
+`asmrsub` reads the speech segments from whisper.cpp's log and trims each cue
+back to its speech. See [docs/FINDINGS.md](docs/FINDINGS.md#finding-5-vad-stretches-cues-across-the-gaps).
+
 ## Install
 
 ```console
@@ -178,7 +188,9 @@ asmrsub run ./in --listen --remove-wav
 | `--lang` | spoken language (default `ja`) |
 | `--prompt` | initial prompt; the fix for proper nouns the model keeps re-spelling |
 | `--no-vad` | disable VAD — see the table above before you do |
-| `--repeat-limit N` | consecutive identical lines treated as a decoder loop (default 6) |
+| `--vad-threshold X` | VAD speech threshold (whisper.cpp's default 0.5); try 0.35 for faint whispering — [measured here](docs/FINDINGS.md#finding-6-the-default-vad-threshold-misses-faint-whispering) |
+| `--repeat-limit N` | consecutive identical lines, or repeats inside one line, treated as a decoder loop (default 6) |
+| `--no-trim` | keep whisper.cpp's cue timing even where a cue spans long non-speech |
 | `--threads N` | CPU threads (default: every logical core) |
 | `--no-gpu` / `--device N` | force CPU / pick a GPU |
 | `--listen` | also render a compressed MP3 for human listening |
@@ -203,6 +215,20 @@ inside silence  0
 
 Anything under 60% triggers a warning; the first thing to check is whether VAD
 was on.
+
+Non-silent audio is only a stand-in for speech, and a poor one on material
+full of non-speech sound — ASMR triggers, music, a massage. Pass the whisper
+log from the run and coverage is measured against the speech VAD actually
+found instead; `asmrsub run` always does this when the log has it.
+
+```console
+$ asmrsub report lecture.srt lecture.wav --whisper-log _asmrsub/lecture.whisper.log
+```
+
+The report also counts cues longer than 30 seconds. whisper.cpp decodes
+30-second windows, so no segment it produces can be that long; a cue that is
+was stretched across non-speech, and every second of it is counted as
+"subtitled". Any such cue triggers a warning that coverage is overstated.
 
 ### `asmrsub clean`
 
@@ -245,7 +271,7 @@ it favours the discarded side.
 decoder cannot feed its own output back in and fall into repetition loops, and
 `--suppress-nst`.
 
-**Cleanup.** Three rules, in order of how much evidence backs them:
+**Cleanup.** Three removal rules, in order of how much evidence backs them:
 
 1. cues sitting inside detected silence — fabricated, always
 2. zero-length cues — not subtitles, and some players choke on them
@@ -254,6 +280,19 @@ decoder cannot feed its own output back in and fall into repetition loops, and
 That third threshold should not be lowered. Real speech repeats short
 interjections three to five times constantly; a threshold of 3 deletes genuine
 content. This was measured, not guessed.
+
+Then two repairs to the cues that survive:
+
+4. a loop *inside* one cue — `あ、` a hundred times over — is cut back to
+   five repetitions, the same number rule 3 keeps of a run of lines. Genuine
+   repetition within a line (`だんだんだんだん`) peaked at four in the
+   measurements, so it is left alone.
+5. a cue that reaches more than 2 s beyond the speech VAD found under it is
+   trimmed back to that speech, plus a little padding and enough time to be
+   read. When its speech sits in islands further apart than that, it keeps
+   the island holding the most speech — re-transcribing each island on its
+   own showed that to be where the words were 48 times out of 54. `--no-trim`
+   turns this off.
 
 ## Output layout
 
@@ -268,12 +307,18 @@ recordings/
 ```
 
 The raw transcript is kept so you can re-run cleanup with different settings
-without paying for transcription again.
+without paying for transcription again: delete the final `.srt` and run the
+same command. The whisper log is kept for the same reason — it holds the VAD
+speech segments that cue trimming works from.
 
 ## Limitations
 
-- Timing is never altered. Nothing is trimmed, stretched or re-synced, because
-  subtitle timing has to match the original media.
+- Timing is never stretched, shifted or re-synced, because subtitle timing has
+  to match the original media. The one change is trimming cues back to the
+  speech under them, inside the span whisper.cpp gave each cue.
+- A cue whose words really do straddle two speech islands cannot be split
+  without token-level timing, so it is shown with only one of them: the one
+  holding most of its speech.
 - Translation is out of scope. `asmrsub` produces subtitles in the spoken
   language.
 - Very long filenames can exceed the Windows 260-character path limit.

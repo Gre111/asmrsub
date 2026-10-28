@@ -1,11 +1,16 @@
 # Measurements
 
-Everything here comes from one 95-minute Japanese recording: long-form,
+Findings 1–4 come from one 95-minute Japanese recording: long-form,
 conversational, much of it spoken very quietly, with loud non-speech sounds
 throughout. It is the kind of material that breaks the default settings of
 most Whisper front-ends, which is why it was useful to measure.
 
 Hardware: AMD RX 6650 XT (Vulkan), Intel i5-12400F, `large-v3-turbo`.
+
+Findings 5 and 6 come from two further Japanese recordings — a 40-minute
+whispered ASMR stream and a 154-minute recording with long stretches of
+non-speech sound — on an Apple M2 (Metal), whisper.cpp 1.9.5,
+`large-v3-turbo`, Silero VAD v6.2.0.
 
 ## The recording
 
@@ -118,15 +123,95 @@ The fix is `--prompt`, which costs nothing: list the proper nouns and domain
 vocabulary and the model stops guessing. This is now the first thing to try
 when a transcript is mostly good but keeps mangling specific terms.
 
+## Finding 5: VAD stretches cues across the gaps
+
+Both recordings transcribed without errors and reported 91% and 98% coverage.
+Both had lines sitting on screen for minutes.
+
+| | 40-min stream | 154-min recording |
+|---|---|---|
+| cues | 64 | 492 |
+| cues longer than 30 s | 16 | 61 |
+| longest cue | 328.6 s | 484.2 s |
+| VAD speech under that cue | 1.0 s | 1.6 s |
+| cues carrying > 2 s of non-speech | 39 | 249 |
+
+The mechanism is in how whisper.cpp runs VAD. It cuts out the speech segments,
+joins them end to end with 0.1 s of silence between them, decodes that, and
+maps each timestamp back to the original audio through a table of segment
+boundaries. Inside each 0.1 s join the table interpolates linearly across the
+*whole* original gap. A timestamp that lands in a join — routine, since that
+is where whisper sees a pause — comes out somewhere in the middle of a gap
+that may be minutes long. And a cue whose words straddle a join spans the gap
+outright: whisper heard a 0.1 s pause, the subtitle covers 90 s of other
+sound.
+
+That makes the edges easy: any part of a cue that reaches past its speech into
+a gap came from interpolation, and pulling it back is just undoing the map.
+The whisper log lists every VAD segment, so `asmrsub` trims each cue that
+reaches more than 2 s beyond its speech.
+
+The judgement call is a cue whose speech sits in two islands far apart: which
+one held the words? 69 cues looked like that. Each island was cut out and
+re-transcribed on its own:
+
+| | cues |
+|---|---|
+| words in one island only | 54 |
+| — the island with the most speech | **48** |
+| — always the last island would have been right | 46 |
+| — always the first island would have been right | 6 |
+| words split across two islands | 7 |
+| inconclusive (island too short to transcribe alone) | 8 |
+
+So a straddling cue keeps the island with the most speech. It is wrong about
+one time in nine, and when it is, the line appears a few seconds or minutes
+early or late — against being on screen for all of those minutes before.
+
+Trimming also changed what coverage meant. Against non-silent audio, the
+trimmed files scored 8% and 12%: nearly all of their non-silent audio was
+not speech, and the stretched cues had been filling it. Measured against the
+speech VAD found, they scored 74% and 88% (78% and 99% before trimming; the
+difference is speech that only a stretched cue had covered). `asmrsub run` now
+reports coverage that way whenever the log has the segments. Finding 1's VAD
+figures were taken before trimming existed and may be flattered the same
+way; by how much was not re-measured.
+
+The same files had three decoder loops *inside* single cues — `あ、` repeated
+77 to 109 times, one of them in a 316-second cue — which rule 3, looking for
+runs of identical lines, cannot see. The most a genuine line repeated anything
+was four times (`だんだんだんだん`, `ダメダメダメダメ`), so the line-level
+threshold of 6 separates the two cleanly here as well.
+
+## Finding 6: the default VAD threshold misses faint whispering
+
+The stream's VAD found only 2.8 minutes of speech in 40. Lowering whisper.cpp's
+speech threshold from its default of 0.5:
+
+| `--vad-threshold` | VAD speech | cues | characters |
+|---|---|---|---|
+| 0.5 (default) | 2.8 min | 64 | 636 |
+| 0.35 | 3.1 min | 85 | 848 |
+| 0.2 | 3.8 min | 97 | 867 |
+
+At 0.35 the transcript gained a third more text, including a 45-second passage
+— viewers' names being read out — that the default run had no subtitles for at
+all. Neither lower threshold produced a phantom line such as
+`ご視聴ありがとうございました`. Individual lines came out differently
+— some better, some worse — because the decoder sees different audio around
+them. One recording is not enough to move the default, so it stays at 0.5 and
+`--vad-threshold` is there for whispered material.
+
 ## Summary
 
 Ranked by value actually delivered:
 
 1. `--vad` — recovered 24.6 minutes of missing dialogue, and ran 3× faster
 2. silence-based cleanup — removes invented lines deterministically
-3. `--prompt` — fixes proper nouns, free
-4. SNR-preserving audio prep — correct, small effect
-5. source separation — **measured at approximately zero benefit here**
+3. trimming cues to VAD speech — undoes the stretching VAD itself causes
+4. `--prompt` — fixes proper nouns, free
+5. SNR-preserving audio prep — correct, small effect
+6. source separation — **measured at approximately zero benefit here**
 
 The general lesson is in the gap between items 1 and 5. The intuitive
 diagnosis (loud sounds drowning quiet speech) was wrong, and the actual defect

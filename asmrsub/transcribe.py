@@ -15,9 +15,17 @@ loops. ``--suppress-nst`` suppresses non-speech tokens.
 from __future__ import annotations
 
 import os
+import re
 import subprocess
 from dataclasses import dataclass, field
 from pathlib import Path
+
+from .audio import Span
+
+# whisper.cpp logs every speech segment its VAD found, in original-audio time:
+#   whisper_vad_segments_from_probs: VAD segment 6: start = 121.95, end = 122.56 (duration: 0.61)
+_VAD_SEGMENT = re.compile(
+    r"VAD segment \d+: start = ([0-9.]+), end = ([0-9.]+)")
 
 
 def default_threads() -> int:
@@ -41,6 +49,7 @@ def default_threads() -> int:
 class WhisperOptions:
     language: str = "ja"
     use_vad: bool = True
+    vad_threshold: float | None = None   # None keeps whisper.cpp's 0.5
     max_context: int = 0
     suppress_non_speech: bool = True
     prompt: str | None = None
@@ -67,6 +76,8 @@ def build_command(whisper: Path, model: Path, audio: Path, out_base: Path,
         if vad_model is None:
             raise ValueError("VAD requested but no VAD model was found")
         cmd += ["--vad", "-vm", str(vad_model)]
+        if options.vad_threshold is not None:
+            cmd += ["-vt", str(options.vad_threshold)]
     if options.suppress_non_speech:
         cmd.append("-sns")
     if options.prompt:
@@ -94,3 +105,18 @@ def run(whisper: Path, model: Path, audio: Path, out_base: Path,
     else:
         code = subprocess.run(cmd).returncode
     return code == 0
+
+
+def speech_segments(log: Path) -> list[Span]:
+    """The speech segments whisper.cpp's VAD found, read back from its log.
+
+    Empty when VAD was off, when the log is gone, or when a whisper.cpp build
+    words its log differently - callers treat that as "no evidence" and leave
+    cue timing alone.
+    """
+    try:
+        text = log.read_text(encoding="utf-8", errors="replace")
+    except OSError:
+        return []
+    return [Span(float(start), float(end))
+            for start, end in _VAD_SEGMENT.findall(text)]

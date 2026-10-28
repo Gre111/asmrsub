@@ -37,6 +37,7 @@ class Outcome:
     name: str
     cues: int
     removed: int
+    trimmed: int
     coverage: float
     seconds: float
 
@@ -101,12 +102,15 @@ def process(media: Path, chain: tools.Toolchain, args) -> Outcome | None:
 
     options = transcribe.WhisperOptions(
         language=args.lang, use_vad=not args.no_vad,
+        vad_threshold=args.vad_threshold,
         max_context=args.max_context, prompt=args.prompt,
         threads=args.threads, use_gpu=not args.no_gpu,
         gpu_device=args.device)
 
     if not raw_srt.exists() or args.force:
         label = "VAD on" if options.use_vad else "VAD OFF"
+        if options.use_vad and options.vad_threshold is not None:
+            label += f" at {options.vad_threshold}"
         label += ", CPU only" if args.no_gpu else ""
         label += f", {options.resolved_threads()} threads"
         print(f"  [2/3] transcribing ({label}) ...", end="", flush=True)
@@ -119,18 +123,29 @@ def process(media: Path, chain: tools.Toolchain, args) -> Outcome | None:
     else:
         print("  [2/3] reusing existing transcript")
 
+    # The speech segments whisper.cpp's VAD logged: what stretched cues are
+    # trimmed back to, and what coverage is measured against.
+    speech = transcribe.speech_segments(work / f"{short}.whisper.log")
+
     print("  [3/3] detecting silence and cleaning ...", end="", flush=True)
     silence = audio.detect_silence(chain.ffmpeg, wav)
-    result = cleanup.clean_file(raw_srt, silence, final, args.repeat_limit)
-    print(f" removed {result.removed_count}")
+    result = cleanup.clean_file(raw_srt, silence, final, args.repeat_limit,
+                                None if args.no_trim else speech)
+    trimmed = result.repaired_count("trimmed")
+    print(f" removed {result.removed_count}, trimmed {trimmed}, "
+          f"loops {result.repaired_count('loop')}")
     for removal in result.removed[:6]:
         text = removal.cue.text.replace("\n", " ")[:34]
         print(f"        {srt_io.format_timestamp(removal.cue.start)}  "
               f"{removal.reason:<12} {text}")
     if result.removed_count > 6:
         print(f"        ... and {result.removed_count - 6} more")
+    if not speech and not args.no_trim and options.use_vad:
+        print("        no VAD segments in the whisper log - cue timing "
+              "left as whisper.cpp mapped it")
 
-    rep = health.analyse(result.kept, silence, audio.wav_duration(wav))
+    rep = health.analyse(result.kept, silence, audio.wav_duration(wav),
+                         speech or None)
     elapsed = time.time() - started
     print(f"  done: {len(result.kept)} cues, speech coverage "
           f"{rep.coverage*100:.0f}%, {elapsed:.0f}s -> {final.name}")
@@ -141,7 +156,7 @@ def process(media: Path, chain: tools.Toolchain, args) -> Outcome | None:
     if args.remove_wav:
         wav.unlink(missing_ok=True)
 
-    return Outcome(stem, len(result.kept), result.removed_count,
+    return Outcome(stem, len(result.kept), result.removed_count, trimmed,
                    rep.coverage, elapsed)
 
 
@@ -165,10 +180,11 @@ def cmd_run(args) -> int:
 
     print("\n" + "=" * 62)
     if results:
-        print(f"{'file':<34}{'cues':>7}{'removed':>9}{'cover':>8}{'time':>8}")
+        print(f"{'file':<34}{'cues':>7}{'removed':>9}{'trimmed':>9}"
+              f"{'cover':>8}{'time':>8}")
         for r in results:
             name = r.name if len(r.name) <= 33 else r.name[:32] + "…"
-            print(f"{name:<34}{r.cues:>7}{r.removed:>9}"
+            print(f"{name:<34}{r.cues:>7}{r.removed:>9}{r.trimmed:>9}"
                   f"{r.coverage*100:>7.0f}%{r.seconds:>7.0f}s")
     print(f"\ncompleted {len(results)}/{len(media)}")
     return 0 if results else 1
@@ -181,11 +197,16 @@ def cmd_clean(args) -> int:
         Path(args.subtitles).with_suffix(".clean.srt")
     result = cleanup.clean_file(Path(args.subtitles), silence, destination,
                                 args.repeat_limit)
-    print(f"removed {result.removed_count}, kept {len(result.kept)}")
+    print(f"removed {result.removed_count}, repaired {len(result.repaired)}, "
+          f"kept {len(result.kept)}")
     for removal in result.removed:
         text = removal.cue.text.replace("\n", " ")[:40]
         print(f"  {srt_io.format_timestamp(removal.cue.start)}  "
               f"{removal.reason:<12} {text}")
+    for repair in result.repaired:
+        text = repair.after.text.replace("\n", " ")[:40]
+        print(f"  {srt_io.format_timestamp(repair.before.start)}  "
+              f"{repair.reason:<12} {text}")
     print(f"\nwrote {destination}")
     return 0
 
@@ -195,7 +216,14 @@ def cmd_report(args) -> int:
     media = Path(args.media)
     silence = audio.detect_silence(ffmpeg, media)
     total = audio.duration(ffmpeg, media)
-    print(health.analyse_file(Path(args.subtitles), silence, total).render())
+    speech = None
+    if args.whisper_log:
+        speech = transcribe.speech_segments(Path(args.whisper_log))
+        if not speech:
+            print("no VAD segments in that log - measuring against all "
+                  "non-silent audio instead\n", file=sys.stderr)
+    print(health.analyse_file(Path(args.subtitles), silence, total,
+                              speech or None).render())
     return 0
 
 
@@ -231,6 +259,10 @@ def build_parser() -> argparse.ArgumentParser:
     run.add_argument("--vad-model", help="path to ggml-silero-*.bin")
     run.add_argument("--no-vad", action="store_true",
                      help="disable VAD (not recommended - see README)")
+    run.add_argument("--vad-threshold", type=float,
+                     help="VAD speech probability threshold (whisper.cpp's "
+                          "default 0.5); lower it to catch fainter "
+                          "whispering - see docs/FINDINGS.md")
     run.add_argument("--prompt", help="initial prompt; use it to pin down "
                                       "proper nouns and domain vocabulary")
     run.add_argument("--max-context", type=int, default=0,
@@ -245,8 +277,11 @@ def build_parser() -> argparse.ArgumentParser:
                      help="GPU device index for multi-GPU machines")
     run.add_argument("--repeat-limit", type=int,
                      default=cleanup.DEFAULT_REPEAT_LIMIT,
-                     help="consecutive identical lines treated as a loop "
-                          "(default 6; 0 disables)")
+                     help="consecutive identical lines, or repeats inside "
+                          "one line, treated as a loop (default 6; 0 disables)")
+    run.add_argument("--no-trim", action="store_true",
+                     help="keep whisper.cpp's cue timing even where a cue "
+                          "spans long non-speech")
     run.add_argument("--suffix", default="",
                      help="appended to the output .srt stem")
     run.add_argument("--listen", action="store_true",
@@ -268,6 +303,10 @@ def build_parser() -> argparse.ArgumentParser:
     rep = sub.add_parser("report", help="coverage and sanity check for an SRT")
     rep.add_argument("subtitles")
     rep.add_argument("media")
+    rep.add_argument("--whisper-log",
+                     help="whisper.cpp log of a VAD run (_asmrsub/*.whisper"
+                          ".log); measures coverage against the speech VAD "
+                          "found instead of all non-silent audio")
     rep.set_defaults(func=cmd_report)
 
     conf = sub.add_parser(
