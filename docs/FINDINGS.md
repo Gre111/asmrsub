@@ -220,6 +220,50 @@ all. Neither lower threshold produced a phantom line such as
 them. One recording is not enough to move the default, so it stays at 0.5 and
 `--vad-threshold` is there for whispered material.
 
+## Finding 7: on ordinary dialogue, VAD loses more than half
+
+The 143-minute recording from Finding 5 is spoken at normal volume, not
+whispered. Watching it showed whole exchanges without subtitles, the first
+at 04:26–04:36. VAD had found none of that passage, and the same pattern ran
+through the whole film:
+
+| run | characters outside loop cues |
+|---|---|
+| prepared audio, VAD 0.5 (the default) | 5,139 |
+| unprocessed audio, VAD 0.5 | 5,574 |
+| unprocessed audio, VAD 0.35 | 5,794 |
+| highpass and denoise only, VAD 0.5 | 6,941 |
+| unprocessed audio, no VAD | 11,848 |
+| prepared audio, no VAD | **11,542** |
+
+Two things cost VAD its speech. The +20 dB gain is one: gain alone cut what VAD
+found from 25.9 to 12.4 minutes. The audio chain was tuned for whispering, and
+Silero scores this much louder audio as less like speech. The other is state:
+Silero carries memory from the audio before it, and the same ten-second passage
+scored between 1.1 and 5.2 seconds of speech depending only on where VAD
+started reading. No threshold or filter tried came near turning VAD off.
+
+Without VAD the prepared audio did as well as the unprocessed audio, so the
+chain only hurts VAD and did not need changing. The extra text is real: in
+90–100 minutes VAD gave 226 characters and no VAD gave 1,272 of coherent
+dialogue. The runs are not strictly nested, though: of the VAD run's 422 cues
+of four characters or more, 37 had no counterpart in the final no-VAD
+subtitles. 7 of those were loops, but most of the rest were real lines,
+one of them 29 characters long.
+
+Turning VAD off has costs. Transcription took 22 minutes instead of 3, and
+47 cues came back lasting exactly 30.0 s, a whole decode window. 45 of them
+held under one character per second — `ご視聴ありがとうございました`,
+`おやすみなさい`, moans — and the other two held 90 characters or more, so
+rule 4 removes the former. A phantom that stops short of a full window still
+gets through, as one `ご視聴ありがとうございました` of 13.8 s did. With no speech
+segments to trim against, 53 cues stayed on screen for 12 seconds or more.
+
+This runs against Finding 1, where VAD recovered a quarter of the speech. Those
+are one recording each: quiet speech under loud sound there, normal speech
+here. VAD stays the default because whispered material is what this tool is
+for, and `--no-vad` is the answer when dialogue goes missing.
+
 ## Summary
 
 Ranked by value actually delivered:
@@ -231,7 +275,10 @@ Ranked by value actually delivered:
 5. SNR-preserving audio prep — correct, small effect
 6. source separation — **measured at approximately zero benefit here**
 
-The general lesson is in the gap between items 1 and 5. The intuitive
+Item 1 depends on the material: on normal-volume dialogue the same flag cost
+more than half the text (Finding 7).
+
+The general lesson is in the gap between items 1 and 6. The intuitive
 diagnosis (loud sounds drowning quiet speech) was wrong, and the actual defect
 (whole windows being discarded) produced no error message and no visible
 symptom. Measure coverage, and measure confidence against the variable you

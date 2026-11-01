@@ -258,7 +258,8 @@ def build_parser() -> argparse.ArgumentParser:
     run.add_argument("--whisper", help="path to the whisper.cpp CLI")
     run.add_argument("--vad-model", help="path to ggml-silero-*.bin")
     run.add_argument("--no-vad", action="store_true",
-                     help="disable VAD (not recommended - see README)")
+                     help="disable VAD: slower, but recovers far more of "
+                          "normal-volume dialogue - see README")
     run.add_argument("--vad-threshold", type=float,
                      help="VAD speech probability threshold (whisper.cpp's "
                           "default 0.5); lower it to catch fainter "

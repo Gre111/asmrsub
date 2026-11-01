@@ -187,7 +187,7 @@ asmrsub run ./in --listen --remove-wav
 |---|---|
 | `--lang` | spoken language (default `ja`) |
 | `--prompt` | initial prompt; the fix for proper nouns the model keeps re-spelling |
-| `--no-vad` | disable VAD — see the table above before you do |
+| `--no-vad` | disable VAD — slower, but the better choice for normal-volume dialogue, see below |
 | `--vad-threshold X` | VAD speech threshold (whisper.cpp's default 0.5); try 0.35 for faint whispering — [measured here](docs/FINDINGS.md#finding-6-the-default-vad-threshold-misses-faint-whispering) |
 | `--repeat-limit N` | consecutive identical lines, or repeats inside one line, treated as a decoder loop (default 6) |
 | `--no-trim` | keep whisper.cpp's cue timing even where a cue spans long non-speech |
@@ -196,6 +196,16 @@ asmrsub run ./in --listen --remove-wav
 | `--listen` | also render a compressed MP3 for human listening |
 | `--remove-wav` | delete the intermediate 16 kHz WAV afterwards |
 | `--force` | redo work that is already done |
+
+VAD on is the right default for whispered speech and quiet speech under louder
+sound. For ordinary dialogue it can be the wrong choice. On a 143-minute
+recording, VAD kept most of the dialogue away from the decoder: the subtitles
+held 5,173 characters, against 11,497 with `--no-vad`. If spoken lines are
+missing, run again with `--no-vad --force`. The price is time (22 minutes here
+instead of 3) and timing: with no speech segments to trim against, short lines
+can stay on screen longer, and coverage falls back to measuring against all
+non-silent audio. See
+[the measurements](docs/FINDINGS.md#finding-7-on-ordinary-dialogue-vad-loses-more-than-half).
 
 ### `asmrsub report`
 
@@ -273,7 +283,7 @@ it favours the discarded side.
 decoder cannot feed its own output back in and fall into repetition loops, and
 `--suppress-nst`.
 
-**Cleanup.** Three removal rules, in order of how much evidence backs them:
+**Cleanup.** Four removal rules, in order of how much evidence backs them:
 
 1. cues sitting inside detected silence — fabricated, always
 2. zero-length cues — not subtitles, and some players choke on them; with VAD
@@ -284,13 +294,16 @@ That third threshold should not be lowered. Real speech repeats short
 interjections three to five times constantly; a threshold of 3 deletes genuine
 content. This was measured, not guessed.
 
+4. a cue lasting exactly 30.0 s with under one character per second — without
+   VAD, a window holding no speech comes back as one invented line filling it
+
 Then two repairs to the cues that survive:
 
-4. a loop *inside* one cue — `あ、` a hundred times over — is cut back to
+5. a loop *inside* one cue — `あ、` a hundred times over — is cut back to
    five repetitions, the same number rule 3 keeps of a run of lines. Genuine
    repetition within a line (`だんだんだんだん`) peaked at four in the
    measurements, so it is left alone.
-5. a cue that reaches more than 2 s beyond the speech VAD found under it is
+6. a cue that reaches more than 2 s beyond the speech VAD found under it is
    trimmed back to that speech, plus a little padding and enough time to be
    read. When its speech sits in islands further apart than that, it keeps
    the island holding the most speech — re-transcribing each island on its

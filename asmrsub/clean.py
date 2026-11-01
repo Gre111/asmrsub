@@ -1,6 +1,6 @@
 """Remove the subtitles a recogniser invents when nobody is speaking.
 
-Three rules, in order of how much evidence backs them:
+Four rules, in order of how much evidence backs them:
 
 1. **Silent spans.** A cue that sits inside detected silence is fabricated,
    full stop. This is the rule that matters: on real material it catches the
@@ -16,15 +16,23 @@ Three rules, in order of how much evidence backs them:
    genuine speech repeats short interjections three to five times all the
    time, and a threshold of 3 deletes real content.
 
+4. **Whole-window lines.** Without VAD, whisper.cpp decodes 30-second windows,
+   and one with no speech in it tends to come back as a single line filling it
+   exactly: ``ご視聴ありがとうございました`` or ``おやすみなさい`` from the
+   first second to the last. Such a cue is removed when it holds under one
+   character per second. On a 143-minute recording, 45 of the 47 cues lasting
+   exactly 30.0 s fell under that, the longest at 28 characters and every one
+   a phantom or a moan; the other two held 90 and more.
+
 Two repairs then apply to the cues that survive:
 
-4. **Loops inside a cue.** The same decoder loop also happens within a single
+5. **Loops inside a cue.** The same decoder loop also happens within a single
    cue - ``あ、`` a hundred times over. Any stretch repeated ``repeat_limit``
    times or more in a row is cut back to ``repeat_limit - 1`` repetitions,
    which is exactly what rule 3 keeps of a run of lines. Genuine repetition
    inside a line (``だんだんだんだん``) stays well under the limit.
 
-5. **Cues stretched across non-speech.** With VAD on, whisper.cpp decodes the
+6. **Cues stretched across non-speech.** With VAD on, whisper.cpp decodes the
    speech segments joined end to end with 0.1 s of silence between them, then
    maps every timestamp back to the original audio. A timestamp that lands in
    one of those 0.1 s joins is interpolated across the *whole* original gap,
@@ -50,7 +58,11 @@ from .srt import Cue
 DEFAULT_REPEAT_LIMIT = 6
 DEFAULT_OVERLAP = 0.70
 
-# Rule 5. A pause inside a spoken line rarely reaches two seconds, and with
+# Rule 4. Only an exact fit counts: whisper's own timestamps land here when it
+# found none inside the window, and a VAD-stretched cue practically never does.
+WINDOW_SECONDS = 30.0
+
+# Rule 6. A pause inside a spoken line rarely reaches two seconds, and with
 # VAD on whisper never hears one that long anyway: it is compressed to 0.1 s.
 MAX_NON_SPEECH = 2.0
 PAD_BEFORE = 0.2
@@ -103,7 +115,7 @@ def _loop_pattern(repeat_limit: int) -> re.Pattern | None:
 
 def _collapse_loops(text: str, pattern: re.Pattern,
                     repeat_limit: int) -> tuple[str, int]:
-    """Rule 4. Returns the new text and the longest repeat count cut back."""
+    """Rule 5. Returns the new text and the longest repeat count cut back."""
     longest = 0
 
     def shorten(match: re.Match) -> str:
@@ -113,6 +125,17 @@ def _collapse_loops(text: str, pattern: re.Pattern,
         return unit * (repeat_limit - 1)
 
     return pattern.sub(shorten, text), longest
+
+
+def _fills_window(cue: Cue, loops: re.Pattern | None,
+                  repeat_limit: int) -> bool:
+    """Rule 4. Text is counted without its loops, which are not speech."""
+    if round(cue.duration, 1) != WINDOW_SECONDS:
+        return False
+    text = cue.text
+    if loops is not None:
+        text = _collapse_loops(text, loops, repeat_limit)[0]
+    return len(_WHITESPACE.sub("", text)) < WINDOW_SECONDS
 
 
 def _speech_islands(cue: Cue, speech: list[Span],
@@ -136,7 +159,7 @@ def _speech_islands(cue: Cue, speech: list[Span],
 
 
 def _trim(cue: Cue, speech: list[Span], starts: list[float]) -> Cue | None:
-    """Rule 5. The cue pulled back to its speech, or None to leave it be."""
+    """Rule 6. The cue pulled back to its speech, or None to leave it be."""
     islands = _speech_islands(cue, speech, starts)
     if not islands:
         return None                       # no evidence either way
@@ -171,6 +194,7 @@ def clean(cues: list[Cue], silence: list[Span],
           speech: list[Span] | None = None) -> CleanResult:
     kept: list[Cue] = []
     removed: list[Removal] = []
+    loops = _loop_pattern(repeat_limit)
 
     run_text: str | None = None
     run_length = 0
@@ -181,6 +205,8 @@ def clean(cues: list[Cue], silence: list[Span],
             reason = "zero-length"
         elif _silence_fraction(cue, silence) >= overlap:
             reason = "in silence"
+        elif _fills_window(cue, loops, repeat_limit):
+            reason = "empty window"
 
         normalised = _WHITESPACE.sub("", cue.text)
         if normalised and normalised == run_text:
@@ -199,7 +225,6 @@ def clean(cues: list[Cue], silence: list[Span],
     # The repairs run on survivors only, so what gets removed is decided on
     # whisper's original timing exactly as before.
     repaired: list[Repair] = []
-    loops = _loop_pattern(repeat_limit)
     speech = sorted(speech or [], key=lambda s: s.start)
     starts = [s.start for s in speech]
     for index, cue in enumerate(kept):
