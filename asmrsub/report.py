@@ -10,11 +10,13 @@ Rough expectations: a talk-heavy recording should land well above 80%. Anything
 under 60% means long stretches went missing, and the first thing to check is
 whether VAD was enabled.
 
-Coverage can also be overstated. whisper.cpp decodes 30-second windows, so no
-segment it produces can be longer than that; a cue that is, was stretched
-across non-speech when VAD timestamps were mapped back, and every second of it
-counts as "subtitled". Those cues are counted separately so a high coverage
-figure cannot hide them.
+Coverage can also be overstated. A cue stretched across non-speech when VAD
+timestamps were mapped back counts every second as "subtitled", so cues over
+30 seconds are counted separately and a high coverage figure cannot hide them.
+Length alone does not prove stretching, though: whisper.cpp decodes 30-second
+windows with the pauses compressed out, and when those pauses come back a cue
+of nearly unbroken speech can pass 30 seconds. When the speech segments are
+known, only long cues that are mostly non-speech are called stretched.
 
 "Non-silent audio" is only a stand-in for speech. On material full of
 non-speech sound - ASMR triggers, music, a massage - most of it is not speech,
@@ -67,6 +69,7 @@ class Report:
     in_silence: int
     long_cues: int = 0
     longest: float = 0.0
+    stretched: int = 0                    # long cues mostly without VAD speech
     speech_total: float | None = None     # VAD speech, when known
     speech_covered: float | None = None   # ... and how much of it has cues
     gaps: list[Gap] = field(default_factory=list)
@@ -140,12 +143,18 @@ class Report:
             lines.append(f"WARNING: coverage is only {self.coverage*100:.0f}%. "
                          "Large stretches of speech are probably missing - "
                          "check that VAD was enabled.")
-        if self.long_cues:
+        if self.stretched:
+            lines.append("")
+            lines.append(f"WARNING: {self.stretched} cue(s) over "
+                         f"{LONG_CUE_SECONDS:.0f}s are mostly non-speech - "
+                         "they were stretched across it, and coverage is "
+                         "overstated by them.")
+        elif self.long_cues and self.speech_total is None:
             lines.append("")
             lines.append(f"WARNING: {self.long_cues} cue(s) last longer than "
-                         f"{LONG_CUE_SECONDS:.0f}s, which no whisper segment "
-                         "can - they were stretched across non-speech, and "
-                         "coverage is overstated by them.")
+                         f"{LONG_CUE_SECONDS:.0f}s, probably stretched across "
+                         "non-speech, which overstates coverage - pass "
+                         "--whisper-log to check.")
         return "\n".join(lines)
 
 
@@ -186,7 +195,7 @@ def analyse(cues: list[Cue], silence: list[Span],
         speech_covered = _intersection(
             spans, _union([(c.start, c.end) for c in cues if c.duration > 0]))
 
-    zero = sum(1 for c in cues if c.duration <= 0)
+    zero = sum(1 for c in cues if c.zero_length)
     inside = 0
     for cue in cues:
         if cue.duration <= 0:
@@ -208,12 +217,14 @@ def analyse(cues: list[Cue], silence: list[Span],
                                   if c.text.strip())
     repeats = [(t, n) for t, n in counter.most_common(8) if n >= 8]
 
-    long_cues = sum(1 for c in cues if c.duration > LONG_CUE_SECONDS)
+    long_cues = [c for c in cues if c.duration > LONG_CUE_SECONDS]
     longest = max((c.duration for c in cues), default=0.0)
+    stretched = sum(1 for c in long_cues if speech and sum(
+        s.overlap(c.start, c.end) for s in speech) < c.duration / 2)
 
     return Report(len(cues), covered, total, silence_total, zero, inside,
-                  long_cues, longest, speech_total, speech_covered,
-                  gaps, repeats)
+                  len(long_cues), longest, stretched, speech_total,
+                  speech_covered, gaps, repeats)
 
 
 def analyse_file(srt_path: Path, silence: list[Span],

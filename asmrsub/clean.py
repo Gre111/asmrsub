@@ -8,7 +8,8 @@ Three rules, in order of how much evidence backs them:
    a single cue stretched across minutes of nothing.
 
 2. **Zero-length cues.** ``00:12:15,000 --> 00:12:15,000`` is not a subtitle,
-   and some players choke on it.
+   and some players choke on it. With VAD on, whisper.cpp pads such a segment
+   to exactly 0.1 s, so a cue that short counts as well.
 
 3. **Repetition runs.** A line repeated many times in a row is usually a
    decoder loop. The threshold defaults to 6 and should not be lowered:
@@ -176,7 +177,7 @@ def clean(cues: list[Cue], silence: list[Span],
 
     for cue in cues:
         reason: str | None = None
-        if cue.duration <= 0:
+        if cue.zero_length:
             reason = "zero-length"
         elif _silence_fraction(cue, silence) >= overlap:
             reason = "in silence"

@@ -13,6 +13,10 @@ from pathlib import Path
 
 _TIME_SPLIT = re.compile(r"\s*-->\s*")
 
+# With VAD on, whisper.cpp pads any segment shorter than 0.1 s to exactly that
+# when it maps timestamps back, so a zero-length segment arrives as a 0.1 s cue.
+ZERO_LENGTH = 0.1
+
 
 @dataclass
 class Cue:
@@ -23,6 +27,12 @@ class Cue:
     @property
     def duration(self) -> float:
         return self.end - self.start
+
+    @property
+    def zero_length(self) -> bool:
+        # Rounded to the milliseconds an SRT holds: 0.1 s read back from two
+        # timestamps is rarely exactly 0.1 in floating point.
+        return round(self.duration, 3) <= ZERO_LENGTH
 
 
 def parse_timestamp(value: str) -> float:

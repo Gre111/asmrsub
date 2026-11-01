@@ -183,6 +183,24 @@ runs of identical lines, cannot see. The most a genuine line repeated anything
 was four times (`だんだんだんだん`, `ダメダメダメダメ`), so the line-level
 threshold of 6 separates the two cleanly here as well.
 
+A third recording (143 min, same setup) corrected two assumptions. First, with
+VAD on, whisper.cpp pads any segment shorter than 0.1 s to exactly 0.1 s, so
+the zero-length rule never fired: one decoder loop reached the file as a
+0.1-second cue of 197 characters, overlapping the next cue. The three
+recordings held two such cues, both loops, so a cue that short now counts as
+zero-length. This may also be why Finding 1 counted none on the VAD side; that
+was not re-measured.
+
+Second, length alone does not prove a cue was stretched. One 33-second cue had
+28 seconds of speech under it and no pause over 1.6 s: whisper decodes with
+pauses compressed out, and they come back when timestamps are mapped. Of the
+129 raw cues over 30 s across the three recordings, 2 were at least half
+speech, so the report now calls a long cue stretched only when it is mostly
+non-speech.
+
+The same recording also had one line repeating a shout nine times over ten
+seconds, which may well be genuine. The loop rule cuts it back to five anyway.
+
 ## Finding 6: the default VAD threshold misses faint whispering
 
 The stream's VAD found only 2.8 minutes of speech in 40. Lowering whisper.cpp's

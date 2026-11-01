@@ -225,10 +225,12 @@ found instead; `asmrsub run` always does this when the log has it.
 $ asmrsub report lecture.srt lecture.wav --whisper-log _asmrsub/lecture.whisper.log
 ```
 
-The report also counts cues longer than 30 seconds. whisper.cpp decodes
-30-second windows, so no segment it produces can be that long; a cue that is
-was stretched across non-speech, and every second of it is counted as
-"subtitled". Any such cue triggers a warning that coverage is overstated.
+The report also counts cues longer than 30 seconds, because a cue stretched
+across non-speech counts every second as "subtitled". Length alone does not
+prove stretching: whisper.cpp decodes with pauses compressed out, and when they
+come back a cue of nearly unbroken speech can pass 30 seconds. So with
+`--whisper-log` only long cues that are mostly non-speech trigger a warning
+that coverage is overstated; without it, any cue that long does.
 
 ### `asmrsub clean`
 
@@ -274,7 +276,8 @@ decoder cannot feed its own output back in and fall into repetition loops, and
 **Cleanup.** Three removal rules, in order of how much evidence backs them:
 
 1. cues sitting inside detected silence — fabricated, always
-2. zero-length cues — not subtitles, and some players choke on them
+2. zero-length cues — not subtitles, and some players choke on them; with VAD
+   on, whisper.cpp pads these to 0.1 s, so a cue that short counts too
 3. runs of identical lines — a decoder loop, with the threshold at 6
 
 That third threshold should not be lowered. Real speech repeats short
